@@ -12,7 +12,7 @@ from torchvision.utils import save_image
 parser = argparse.ArgumentParser(description='VAE MNIST Example')
 parser.add_argument('--batch-size', type=int, default=128, metavar='N',
                     help='input batch size for training (default: 128)')
-parser.add_argument('--epochs', type=int, default=10, metavar='N',
+parser.add_argument('--epochs', type=int, default=100, metavar='N',
                     help='number of epochs to train (default: 10)')
 parser.add_argument('--no-cuda', action='store_true', default=False,
                     help='enables CUDA training')
@@ -52,7 +52,7 @@ class CVAE(nn.Module):
         enc_size = self.enc_size
         dec_size = self.dec_size
         z_size   = self.z_size
-        
+
         self.fc1 = nn.Linear(input_size+label_size, enc_size)
         self.fc21 = nn.Linear(enc_size, z_size)
         self.fc22 = nn.Linear(enc_size, z_size)
@@ -81,18 +81,13 @@ class CVAE(nn.Module):
     def forward(self, x, label):
         input_size = self.input_size
         label_size = self.label_size
-        
-        x = x.view(-1, input_size)
-        label = label.view(-1, label_size)
-        
-        #mu, logvar = self.encode(x.view(-1, input_size))
         mu, logvar = self.encode(torch.cat((x, label), 1))
         z = self.reparameterize(mu, logvar)
         return self.decode(torch.cat((z,label),1)), mu, logvar
 
 
 data_size = 784
-label_size = 1
+label_size = 10
 
 model = CVAE(data_size,label_size)
 if args.cuda:
@@ -120,23 +115,23 @@ def train(epoch):
     model.train()
     train_loss = 0
     #label_vector = torch.zeros(128, 10)
+    batch_size = 128
+    label_vector_tmp = torch.FloatTensor(batch_size, 10)
     
     for batch_idx, (data, label) in enumerate(train_loader):
         data = Variable(data)
-        #label = Variable(label)
 
-        label_vector = Variable(torch.zeros(128, 10))
-        #        label_vector[label] = 1.0
-
-        for b in range(128):
-            label_vector[b][label[b]] = 1.0
+        if(data.size(0)!=128):
+            break
         
+        #label = Variable(label)
+        v = label.view(-1,1)
+        label_vector_tmp.zero_()
+        label_vector_tmp.scatter_(1,v,1)
+        label_vector = Variable(label_vector_tmp)
 
         data = data.view(-1,data_size)
-        #label_vector = label_vector.expand(128,10)
-        #label.view(-1,1).float()
 
-        
         if args.cuda:
             data = data.cuda()
             label_vector = label_vector.cuda()
@@ -158,22 +153,37 @@ def train(epoch):
 
 
 def test(epoch):
+    batch_size = 128
     model.eval()
     test_loss = 0
+
+    label_vector_tmp = torch.FloatTensor(batch_size, 10)
+    
     for i, (data, label) in enumerate(test_loader):
+        if(data.size(0)!=128):
+            break
+
+        v = label.view(-1,1)
+        label_vector_tmp.zero_()
+        label_vector_tmp.scatter_(1,v,1)
+        label_vector = Variable(label_vector_tmp)
+
+        
+        data = data.view(-1, data_size)
+        
         if args.cuda:
             data = data.cuda()
-            label = label.cuda()
+            label_vector = label_vector.cuda()
             
         data = Variable(data, volatile=True)
-        label = Variable(label, volatile=True).float()
         
-        recon_batch, mu, logvar = model(data, label)
+        recon_batch, mu, logvar = model(data, label_vector)
+
         test_loss += loss_function(recon_batch, data, mu, logvar).data[0]
         if i == 0:
           n = min(data.size(0), 8)
-          comparison = torch.cat([data[:n],
-                                  recon_batch.view(args.batch_size, 1, 28, 28)[:n]])
+          comparison = torch.cat([data.view(batch_size, 1, 28, 28)[:n],
+                                  recon_batch.view(batch_size, 1, 28, 28)[:n]])
           save_image(comparison.data.cpu(),
                      'results/reconstruction_' + str(epoch) + '.png', nrow=n)
 
@@ -181,16 +191,26 @@ def test(epoch):
     print('====> Test set loss: {:.4f}'.format(test_loss))
 
 
+label_ = torch.LongTensor(64,1)
+
+for i in range(64):
+    label_[i][0] = 5
+
+onehot_tmp = torch.FloatTensor(64,10)
+
 for epoch in range(1, args.epochs + 1):
     train(epoch)
-#    test(epoch)
-#    sample = Variable(torch.randn(64, 20))
-#    label = Variable(torch.zeros(64,1)).float()
-#    
-#    
-#    if args.cuda:
-#       sample = sample.cuda()
-#       label = label.cuda()
-#       sample = model.decode(torch.cat((sample,label),1)).cpu()
-#       save_image(sample.data.view(64, 1, 28, 28),
-#                  'results/sample_' + str(epoch) + '.png')
+    test(epoch)
+    
+    sample = Variable(torch.randn(64, 20))
+    onehot_tmp.zero_()
+    onehot_tmp.scatter_(1,label_,1)
+    onehot = Variable(onehot_tmp)
+    
+    
+    if args.cuda:
+       sample = sample.cuda()
+       onehot = onehot.cuda()
+       sample = model.decode(torch.cat((sample,onehot),1)).cpu()
+       save_image(sample.data.view(64, 1, 28, 28),
+                  'results/sample_' + str(epoch) + '.png')
